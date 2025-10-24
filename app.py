@@ -7,7 +7,8 @@ import logging
 import os
 from typing import Any, Union
 from starlette.middleware.base import BaseHTTPMiddleware
-import psycopg  # Updated from psycopg2 to psycopg
+import psycopg
+from dotenv import load_dotenv  # Explicitly added to ensure availability
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -92,24 +93,17 @@ async def sqlquery_alchemy(sqlquery: str, api_key: str, request: Request) -> Any
     logger.debug(f"SQL Query: {sqlquery}")
     try:
         with engine.connect() as connection:
-            # Start a read-only transaction to enforce read-only at the DB level
             trans = connection.begin()
             try:
                 connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-                # Execute query
                 result = connection.execute(text(sqlquery))
-                # If SELECT query, return results
                 if sqlquery.strip().lower().startswith('select'):
-                    # Get column names
                     columns = result.keys()
-                    # Fetch all rows
                     rows = result.fetchall()
-                    # Convert rows to list of dictionaries
                     results = [dict(zip(columns, row)) for row in rows]
                     logger.debug(f"Query executed successfully via SQLAlchemy, returned {len(results)} rows")
                     trans.commit()
                     return results
-                # For non-SELECT queries, attempt will fail due to read-only transaction
                 else:
                     trans.commit()
                     logger.debug("Non-SELECT query attempted in read-only transaction")
@@ -133,7 +127,6 @@ async def sqlquery_direct(sqlquery: str, api_key: str, request: Request) -> Any:
     logger.debug(f"Received API call to direct connection endpoint: {request.url}")
     logger.debug(f"SQL Query: {sqlquery}")
     try:
-        # Use psycopg connection with context manager
         with psycopg.connect(
             host=DB_HOST,
             port=DB_PORT,
@@ -141,17 +134,13 @@ async def sqlquery_direct(sqlquery: str, api_key: str, request: Request) -> Any:
             user=DB_USER,
             password=DB_PASSWORD
         ) as connection:
-            # Enforce read-only at the session level
             connection.set_session(readonly=True, autocommit=False)
             with connection.cursor() as cursor:
-                # Execute query
                 cursor.execute(sqlquery)
-                # If SELECT query, return results
                 if sqlquery.strip().lower().startswith('select'):
                     results = cursor.fetchall()
                     logger.debug(f"Query executed successfully via direct connection, returned {len(results)} rows")
                     return list(results)
-                # For non-SELECT queries, commit and return status
                 else:
                     connection.commit()
                     logger.debug("Non-SELECT query executed successfully via direct connection")
