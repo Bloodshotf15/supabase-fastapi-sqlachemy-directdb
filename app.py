@@ -132,26 +132,25 @@ async def sqlquery_direct(sqlquery: str, api_key: str, request: Request) -> Any:
     logger.debug(f"Received API call to direct connection endpoint: {request.url}")
     logger.debug(f"SQL Query: {sqlquery}")
     try:
-        # Connect with session parameters set at creation
         with psycopg.connect(
             host=DB_HOST,
             port=DB_PORT,
             dbname=DB_NAME,
             user=DB_USER,
-            password=DB_PASSWORD,
-            readonly=True,  # Set readonly at connection time
-            autocommit=False  # Managed by the context
+            password=DB_PASSWORD
         ) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(sqlquery)
-                if sqlquery.strip().lower().startswith('select'):
-                    results = cursor.fetchall()
-                    logger.debug(f"Query executed successfully via direct connection, returned {len(results)} rows")
-                    return list(results)
-                else:
-                    connection.commit()
-                    logger.debug("Non-SELECT query executed successfully via direct connection")
-                    return {"status": "success", "message": "Query executed successfully"}
+            # Set transaction to read-only
+            with connection.transaction():
+                connection.execute("SET TRANSACTION READ ONLY")
+                with connection.cursor() as cursor:
+                    cursor.execute(sqlquery)
+                    if sqlquery.strip().lower().startswith('select'):
+                        results = cursor.fetchall()
+                        logger.debug(f"Query executed successfully via direct connection, returned {len(results)} rows")
+                        return list(results)
+                    else:
+                        logger.debug("Non-SELECT query attempted in read-only transaction")
+                        return {"status": "success", "message": "Query executed successfully"}
     except psycopg.Error as e:
         logger.error(f"PostgreSQL error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
