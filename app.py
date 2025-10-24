@@ -132,14 +132,16 @@ async def sqlquery_direct(sqlquery: str, api_key: str, request: Request) -> Any:
     logger.debug(f"Received API call to direct connection endpoint: {request.url}")
     logger.debug(f"SQL Query: {sqlquery}")
     try:
+        # Connect with session parameters set at creation
         with psycopg.connect(
             host=DB_HOST,
             port=DB_PORT,
             dbname=DB_NAME,
             user=DB_USER,
-            password=DB_PASSWORD
+            password=DB_PASSWORD,
+            readonly=True,  # Set readonly at connection time
+            autocommit=False  # Managed by the context
         ) as connection:
-            connection.set_session(readonly=True, autocommit=False)
             with connection.cursor() as cursor:
                 cursor.execute(sqlquery)
                 if sqlquery.strip().lower().startswith('select'):
@@ -156,7 +158,6 @@ async def sqlquery_direct(sqlquery: str, api_key: str, request: Request) -> Any:
     except Exception as e:
         logger.error(f"Unexpected error in direct connection endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-
 @app.get("/")
 def health_check():
     """Health check endpoint to verify the service is running."""
