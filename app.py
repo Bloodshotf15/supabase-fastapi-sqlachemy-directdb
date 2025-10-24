@@ -7,9 +7,7 @@ import logging
 import os
 from typing import Any, Union
 from starlette.middleware.base import BaseHTTPMiddleware
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
+import psycopg  # Updated from psycopg2 to psycopg
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -27,11 +25,9 @@ load_dotenv()
 # Database URL and credentials
 DATABASE_URL = os.getenv("DATABASE_URL")
 REX_API_KEY = os.getenv("REX_API_KEY")
-
 if not DATABASE_URL:
     logger.error("DATABASE_URL environment variable is not set")
     raise ValueError("DATABASE_URL environment variable is required")
-
 if not REX_API_KEY:
     logger.error("REX_API_KEY environment variable is not set")
     raise ValueError("REX_API_KEY environment variable is required")
@@ -65,13 +61,12 @@ logger.info(f"Using rate limit: {RATE_LIMIT}")
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 
-# Custom 429 handler (match prior app behavior)
+# Custom 429 handler
 async def custom_rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         content={"detail": "Rate limit exceeded. Please try again later or contact your administrator."}
     )
-
 app.add_exception_handler(RateLimitExceeded, custom_rate_limit_exceeded_handler)
 
 # Create SQLAlchemy engine
@@ -81,7 +76,7 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 @event.listens_for(engine, "connect")
 def set_session_readonly(dbapi_connection, connection_record):
     try:
-        # dbapi_connection is the raw psycopg2 connection
+        # dbapi_connection is the raw psycopg connection
         dbapi_connection.set_session(readonly=True, autocommit=False)
         logger.debug("SQLAlchemy DBAPI session set to readonly")
     except Exception as e:
@@ -93,35 +88,27 @@ async def sqlquery_alchemy(sqlquery: str, api_key: str, request: Request) -> Any
     """Execute SQL query using SQLAlchemy and return results directly."""
     if api_key != REX_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
-
     logger.debug(f"Received API call to SQLAlchemy endpoint: {request.url}")
     logger.debug(f"SQL Query: {sqlquery}")
-
     try:
         with engine.connect() as connection:
             # Start a read-only transaction to enforce read-only at the DB level
             trans = connection.begin()
             try:
                 connection.exec_driver_sql("SET TRANSACTION READ ONLY")
-
                 # Execute query
                 result = connection.execute(text(sqlquery))
-                
                 # If SELECT query, return results
                 if sqlquery.strip().lower().startswith('select'):
                     # Get column names
                     columns = result.keys()
-                    
                     # Fetch all rows
                     rows = result.fetchall()
-                    
                     # Convert rows to list of dictionaries
                     results = [dict(zip(columns, row)) for row in rows]
-                    
                     logger.debug(f"Query executed successfully via SQLAlchemy, returned {len(results)} rows")
                     trans.commit()
                     return results
-                
                 # For non-SELECT queries, attempt will fail due to read-only transaction
                 else:
                     trans.commit()
@@ -130,7 +117,6 @@ async def sqlquery_alchemy(sqlquery: str, api_key: str, request: Request) -> Any
             except:
                 trans.rollback()
                 raise
-
     except SQLAlchemyError as e:
         logger.error(f"SQLAlchemy error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
@@ -141,55 +127,47 @@ async def sqlquery_alchemy(sqlquery: str, api_key: str, request: Request) -> Any
 @app.get("/sqlquery_direct/")
 @limiter.limit(RATE_LIMIT)
 async def sqlquery_direct(sqlquery: str, api_key: str, request: Request) -> Any:
-    """Execute SQL query using direct psycopg2 connection and return results."""
+    """Execute SQL query using direct psycopg connection and return results."""
     if api_key != REX_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
-
     logger.debug(f"Received API call to direct connection endpoint: {request.url}")
     logger.debug(f"SQL Query: {sqlquery}")
-
-    connection = None
     try:
-        # Create direct connection
-        connection = psycopg2.connect(
+        # Use psycopg connection with context manager
+        with psycopg.connect(
             host=DB_HOST,
             port=DB_PORT,
             dbname=DB_NAME,
             user=DB_USER,
-            password=DB_PASSWORD,
-            cursor_factory=RealDictCursor  # This will return results as dictionaries
-        )
-        # Enforce read-only at the session level for this connection
-        connection.set_session(readonly=True, autocommit=False)
-        
-        with connection.cursor() as cursor:
-            # Execute query
-            cursor.execute(sqlquery)
-            
-            # If SELECT query, return results
-            if sqlquery.strip().lower().startswith('select'):
-                results = cursor.fetchall()
-                logger.debug(f"Query executed successfully via direct connection, returned {len(results)} rows")
-                # RealDictCursor returns results as dictionaries, so we can return directly
-                return list(results)
-            
-            # For non-SELECT queries, commit and return status
-            else:
-                connection.commit()
-                logger.debug("Non-SELECT query executed successfully via direct connection")
-                return {"status": "success", "message": "Query executed successfully"}
-
-    except psycopg2.Error as e:
+            password=DB_PASSWORD
+        ) as connection:
+            # Enforce read-only at the session level
+            connection.set_session(readonly=True, autocommit=False)
+            with connection.cursor() as cursor:
+                # Execute query
+                cursor.execute(sqlquery)
+                # If SELECT query, return results
+                if sqlquery.strip().lower().startswith('select'):
+                    results = cursor.fetchall()
+                    logger.debug(f"Query executed successfully via direct connection, returned {len(results)} rows")
+                    return list(results)
+                # For non-SELECT queries, commit and return status
+                else:
+                    connection.commit()
+                    logger.debug("Non-SELECT query executed successfully via direct connection")
+                    return {"status": "success", "message": "Query executed successfully"}
+    except psycopg.Error as e:
         logger.error(f"PostgreSQL error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     except Exception as e:
         logger.error(f"Unexpected error in direct connection endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-    finally:
-        if connection:
-            connection.close()
-            logger.debug("Database connection closed")
+
+@app.get("/")
+def health_check():
+    """Health check endpoint to verify the service is running."""
+    return {"status": "healthy"}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
