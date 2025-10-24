@@ -8,7 +8,7 @@ import os
 from typing import Any, Union
 from starlette.middleware.base import BaseHTTPMiddleware
 import psycopg
-from dotenv import load_dotenv  # Explicitly added to ensure availability
+from dotenv import load_dotenv  # Explicitly imported
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -33,7 +33,7 @@ if not REX_API_KEY:
     logger.error("REX_API_KEY environment variable is not set")
     raise ValueError("REX_API_KEY environment variable is required")
 
-# Parse connection details from DATABASE_URL
+# Parse connection details from DATABASE_URL for direct psycopg usage
 from urllib.parse import urlparse
 parsed_url = urlparse(DATABASE_URL)
 DB_HOST = parsed_url.hostname
@@ -41,6 +41,11 @@ DB_PORT = parsed_url.port
 DB_NAME = parsed_url.path[1:]  # Remove leading slash
 DB_USER = parsed_url.username
 DB_PASSWORD = parsed_url.password
+
+# Adjust DATABASE_URL for SQLAlchemy psycopg dialect
+# Ensure the URL starts with "postgresql+psycopg://" instead of "postgresql://"
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len("postgresql://"):]
 
 # Initialize FastAPI
 app = FastAPI()
@@ -70,7 +75,7 @@ async def custom_rate_limit_exceeded_handler(request: Request, exc: RateLimitExc
     )
 app.add_exception_handler(RateLimitExceeded, custom_rate_limit_exceeded_handler)
 
-# Create SQLAlchemy engine
+# Create SQLAlchemy engine with psycopg dialect
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 # Ensure all SQLAlchemy connections are session-level read-only
