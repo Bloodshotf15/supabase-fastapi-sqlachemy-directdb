@@ -161,6 +161,36 @@ async def sqlquery_direct(sqlquery: str, api_key: str, request: Request) -> Any:
 def health_check():
     """Health check endpoint to verify the service is running."""
     return {"status": "healthy"}
+@app.post("/querySalesforceData")
+async def query_salesforce_data(payload: dict):
+    sqlquery = payload.get("sqlquery")
+    api_key = payload.get("api_key")
+
+    if api_key != REX_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    try:
+        with psycopg.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD
+        ) as connection:
+            with connection.transaction():
+                connection.execute("SET TRANSACTION READ ONLY")
+                with connection.cursor() as cursor:
+                    cursor.execute(sqlquery)
+                    if sqlquery.strip().lower().startswith("select"):
+                        columns = [desc.name for desc in cursor.description]
+                        rows = cursor.fetchall()
+                        data = [dict(zip(columns, row)) for row in rows]
+                        return {"status": "success", "data": data}
+                    else:
+                        return {"status": "success", "message": "Non-select executed"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn
