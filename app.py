@@ -178,7 +178,7 @@ async def query_salesforce_data(payload: dict):
             password=DB_PASSWORD
         ) as connection:
             with connection.transaction():
-                connection.execute("SET TRANSACTION READ ONLY")
+                # connection.execute("SET TRANSACTION READ ONLY")
                 with connection.cursor() as cursor:
                     cursor.execute(sqlquery)
                     if sqlquery.strip().lower().startswith("select"):
